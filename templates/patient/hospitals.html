@@ -1,0 +1,196 @@
+{% extends 'base.html' %}
+
+{% block extra_css %}
+<style>
+  .progress {
+    height: 20px;
+    background-color: #e9ecef;
+    border-radius: 0.25rem;
+    overflow: hidden;
+    margin-bottom: 0;
+  }
+  
+  .progress-bar-custom {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: white;
+    text-align: center;
+    white-space: nowrap;
+    transition: width 0.6s ease;
+  }
+  
+  .bed-utilization-high {
+    background-color: #dc3545; /* Red for high utilization */
+  }
+  
+  .bed-utilization-medium {
+    background-color: #ffc107; /* Yellow for medium utilization */
+  }
+  
+  .bed-utilization-low {
+    background-color: #198754; /* Green for low utilization */
+  }
+  
+  .hospital-name {
+    font-weight: 600;
+  }
+  
+  .hospital-code {
+    color: #6c757d;
+    font-size: 0.875rem;
+  }
+  
+  .specialty-badge {
+    margin-right: 0.25rem;
+    margin-bottom: 0.25rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>{% if state %}Hospitals in {{ state }}{% else %}All Hospitals{% endif %}</h2>
+
+{% if predicted_disease and predicted_disease != 'N/A' %}
+<div class="alert alert-info">
+    <strong>Predicted Condition:</strong> {{ predicted_disease }}
+    {% if auto_specialty %}
+    <br><small>Showing hospitals with <strong>{{ auto_specialty }}</strong> specialty</small>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if notes %}
+<p>Notes: <em>{{ notes }}</em></p>
+{% endif %}
+
+<div class="filter-section mb-4">
+    <form method="get" class="row g-3">
+        <div class="col-md-4">
+            <label for="state" class="form-label">State</label>
+            <select name="state" id="state" class="form-select">
+                <option value="">All States</option>
+                {% for state in ['Andhra Pradesh', 'Tamil Nadu', 'Karnataka', 'Telangana', 'Maharashtra'] %}
+                <option value="{{ state }}" {% if state == selected_state %}selected{% endif %}>{{ state }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label for="specialty" class="form-label">Specialty</label>
+            <select name="specialty" id="specialty" class="form-select">
+                <option value="">All Specialties</option>
+                {% for spec in specialties %}
+                <option value="{{ spec }}" {% if spec == selected_specialty %}selected{% endif %}>{{ spec }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary">Filter</button>
+            <a href="{{ url_for('patient_dashboard') }}" class="btn btn-outline-secondary ms-2">Reset</a>
+        </div>
+    </form>
+</div>
+
+{% if hospitals %}
+<table class="table table-hover">
+  <thead class="table-light">
+    <tr>
+      <th>Hospital Name</th>
+      <th>Location</th>
+      <th>Beds</th>
+      <th>Ambulances</th>
+      <th>Doctors</th>
+      <th>Specialties</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in hospitals %}
+    <tr>
+      <td>
+        <div class="hospital-name">{{ h.name }}</div>
+        <div class="hospital-code">{{ h.hospital_code }}</div>
+      </td>
+      <td>{{ h.state }}</td>
+      <td>
+        {% set bed_utilization = (h.booked_beds / h.total_beds * 100) if h.total_beds > 0 else 0 %}
+        {% if bed_utilization > 80 %}
+          {% set progress_class = 'bed-utilization-high' %}
+        {% elif bed_utilization > 50 %}
+          {% set progress_class = 'bed-utilization-medium' %}
+        {% else %}
+          {% set progress_class = 'bed-utilization-low' %}
+        {% endif %}
+        {% set width_style = 'width: ' ~ bed_utilization ~ '%;' %}
+        <div class="progress">
+          <div class="progress-bar-custom {{ progress_class }}" 
+               role="progressbar" 
+               style="{{ width_style }}" 
+               aria-valuenow="{{ bed_utilization }}" 
+               aria-valuemin="0" 
+               aria-valuemax="100"
+               title="{{ h.available_beds }} available">
+            {{ h.available_beds }} / {{ h.total_beds }}
+          </div>
+        </div>
+      </td>
+      <td>
+        {% if h.ambulances_total > 0 %}
+          {% set ambulance_available = h.ambulances_total - h.ambulances_busy %}
+          <span class="badge {% if ambulance_available > 0 %}bg-success{% else %}bg-danger{% endif %}">
+            {{ ambulance_available }} of {{ h.ambulances_total }} available
+          </span>
+        {% else %}
+          <span class="badge bg-secondary">No ambulances</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if h.doctors_total > 0 %}
+          <span class="badge {% if h.doctors_available > 0 %}bg-success{% else %}bg-warning{% endif %}">
+            {{ h.doctors_available }} of {{ h.doctors_total }} available
+          </span>
+        {% else %}
+          <span class="badge bg-secondary">No doctors listed</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if h.specialists %}
+          <div class="specialty-tags">
+            {% for specialty, count in h.specialists.items() %}
+              {% if count > 0 %}
+                <span class="badge bg-info text-dark me-1 mb-1 specialty-badge">{{ specialty }} ({{ count }})</span>
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% else %}
+          <span class="text-muted">No specialties listed</span>
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" action="{{ url_for('create_request', hospital_id=h.id) }}" class="d-grid gap-2">
+          <input type="hidden" name="notes" value="{{ notes }}">
+          <input type="hidden" name="predicted_disease" value="{{ predicted_disease or 'N/A' }}">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="needs_ambulance" id="ambulance-{{ h.id }}">
+            <label class="form-check-label" for="ambulance-{{ h.id }}">Need Ambulance</label>
+          </div>
+          <button type="submit" class="btn btn-sm btn-primary">Send Request</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="alert alert-warning">
+  No hospitals found matching your criteria.
+  {% if selected_specialty %}
+    <br>Try selecting a different specialty or state.
+  {% endif %}
+</div>
+{% endif %}
+
+<p><a href="{{ url_for('patient_dashboard') }}">Back</a></p>
+{% endblock %}

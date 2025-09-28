@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>About</h2>
+<p>This demo app showcases a simple hospital management workflow:</p>
+<ul>
+  <li><strong>Patients</strong>: login, enter symptoms → specialty prediction, choose state, view hospitals with bed & ambulance availability, send request, optionally book ambulance.</li>
+  <li><strong>Hospitals</strong>: login, view pending requests, accept/reject, auto-update beds and ambulances.</li>
+</ul>
+<p>States included: Andhra Pradesh, Tamil Nadu, Karnataka, Telangana, Maharashtra. Database seeded with 50 well-known hospitals.</p>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="hero">
+  <h1>Hospital Management & Ambulance Booking</h1>
+  <p>Patients can predict specialty from symptoms, find hospitals by state, see bed availability, and send requests with ambulance booking. Hospitals can accept/reject and auto-update beds/ambulances.</p>
+  <div class="cta">
+    <a class="btn" href="{{ url_for('login') }}">Login</a>
+    <a class="btn outline" href="{{ url_for('register_patient') }}">Register as Patient</a>
+    <a class="btn outline" href="{{ url_for('register_hospital') }}">Register Hospital Admin</a>
+  </div>
+</section>
+{% endblock %}

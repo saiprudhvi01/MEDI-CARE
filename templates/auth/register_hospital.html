@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Register Hospital Admin</h2>
+<p>Choose your hospital by its code. If you don't see yours, contact the system admin.</p>
+<form method="post" class="form">
+  <label>Username
+    <input type="text" name="username" required>
+  </label>
+  <label>Email
+    <input type="email" name="email" required>
+  </label>
+  <label>Password
+    <input type="password" name="password" required>
+  </label>
+  <label>Hospital Code
+    <input type="text" name="hospital_code" placeholder="e.g., TS04" required>
+  </label>
+  <button type="submit" class="btn">Register</button>
+</form>
+
+<h3>Available Hospitals & Codes</h3>
+<table class="table">
+  <thead>
+    <tr>
+      <th>Code</th>
+      <th>Name</th>
+      <th>State</th>
+      <th>Total Beds</th>
+      <th>Booked</th>
+      <th>Available</th>
+      <th>Ambulances</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in hospitals %}
+    <tr>
+      <td><code>{{ h.hospital_code }}</code></td>
+      <td>{{ h.name }}</td>
+      <td>{{ h.state }}</td>
+      <td>{{ h.total_beds }}</td>
+      <td>{{ h.booked_beds }}</td>
+      <td>{{ h.available_beds }}</td>
+      <td>{{ h.ambulances_total }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

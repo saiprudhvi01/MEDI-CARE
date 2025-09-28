@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>My Requests</h2>
+{% if requests %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Created</th>
+      <th>Hospital</th>
+      <th>Specialty</th>
+      <th>Ambulance</th>
+      <th>Status</th>
+      <th>Symptoms</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in requests %}
+    <tr>
+      <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ r.hospital.name }}</td>
+      <td>{{ r.specialty }}</td>
+      <td>{{ 'Yes' if r.needs_ambulance else 'No' }}</td>
+      <td><span class="badge {{ r.status }}">{{ r.status|capitalize }}</span></td>
+      <td>{{ r.symptoms }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No requests yet.</p>
+{% endif %}
+{% endblock %}

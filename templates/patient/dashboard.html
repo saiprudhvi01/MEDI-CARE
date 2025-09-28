@@ -1,0 +1,120 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container">
+  <h2>Patient Dashboard</h2>
+  <p class="lead">Add your notes about the problem, select a state, and optionally filter by medical specialty to find the most suitable hospitals.</p>
+  
+  <div class="card">
+    <div class="card-body">
+      <form method="post" class="needs-validation" novalidate>
+        <div class="row g-3">
+          <div class="col-12">
+            <label for="notes" class="form-label">Notes about your problem</label>
+            <textarea name="notes" id="notes" class="form-control" rows="3" 
+                      placeholder="e.g., chest tightness since morning, history of heart disease" required></textarea>
+            <div class="invalid-feedback">
+              Please provide some details about your condition.
+            </div>
+          </div>
+          
+          <div class="col-md-6">
+            <label for="state" class="form-label">State</label>
+            <select name="state" id="state" class="form-select" required>
+              <option value="" disabled selected>Choose a state</option>
+              {% for s in states %}
+              <option value="{{ s }}">{{ s }}</option>
+              {% endfor %}
+            </select>
+            <div class="invalid-feedback">
+              Please select a state.
+            </div>
+          </div>
+          
+          <div class="col-md-6">
+            <label for="specialty" class="form-label">Specialty (Optional)</label>
+            <select name="specialty" id="specialty" class="form-select">
+              <option value="" selected>All Specialties</option>
+              <option value="Cardiology">Cardiology (Heart)</option>
+              <option value="Neurology">Neurology (Brain & Nerves)</option>
+              <option value="Orthopedics">Orthopedics (Bones & Joints)</option>
+              <option value="Pediatrics">Pediatrics (Children)</option>
+              <option value="General Medicine">General Medicine</option>
+              <option value="General Surgery">General Surgery</option>
+              <option value="Ophthalmology">Ophthalmology (Eyes)</option>
+              <option value="Dentistry">Dentistry (Teeth)</option>
+              <option value="Dermatology">Dermatology (Skin)</option>
+              <option value="ENT">ENT (Ear, Nose, Throat)</option>
+              <option value="Gastroenterology">Gastroenterology (Stomach & Intestines)</option>
+              <option value="Nephrology">Nephrology (Kidney)</option>
+              <option value="Oncology">Oncology (Cancer)</option>
+            </select>
+          </div>
+          
+          <div class="col-12 mt-3">
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-search me-2"></i>Find Hospitals
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  
+  <div class="card mt-4">
+    <div class="card-body">
+      <h5 class="card-title">Multiple Disease Prediction</h5>
+      <p class="card-text">Check likelihood for specific conditions to help identify the most appropriate medical specialty.</p>
+      <a href="{{ url_for('patient_predict') }}" class="btn btn-outline-primary">
+        <i class="bi bi-clipboard2-pulse me-2"></i>Run Disease Prediction
+      </a>
+      <p class="text-muted mt-2 small">
+        <i class="bi bi-info-circle me-1"></i> 
+        Covers conditions like: Coronary Artery Disease, COPD, CKD, Stroke, Liver Cirrhosis, and more.
+      </p>
+    </div>
+  </div>
+  
+  <style>
+    .card {
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      margin-bottom: 1.5rem;
+    }
+    .card-body {
+      padding: 1.5rem;
+    }
+    .lead {
+      color: #495057;
+      margin-bottom: 1.5rem;
+    }
+    .form-label {
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+    }
+  </style>
+  
+  <script>
+    // Form validation
+    (function () {
+      'use strict'
+      
+      // Fetch all the forms we want to apply custom Bootstrap validation styles to
+      var forms = document.querySelectorAll('.needs-validation')
+      
+      // Loop over them and prevent submission
+      Array.prototype.slice.call(forms)
+        .forEach(function (form) {
+          form.addEventListener('submit', function (event) {
+            if (!form.checkValidity()) {
+              event.preventDefault()
+              event.stopPropagation()
+            }
+            
+            form.classList.add('was-validated')
+          }, false)
+        })
+    })()
+  </script>
+</div>
+{% endblock %}

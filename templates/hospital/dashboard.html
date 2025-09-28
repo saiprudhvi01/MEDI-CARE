@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Hospital Dashboard</h2>
+<section class="stats">
+  <div class="card">
+    <h3>{{ hospital.name }}</h3>
+    <p><strong>State:</strong> {{ hospital.state }}</p>
+    <p><strong>Beds:</strong> {{ hospital.booked_beds }} booked / {{ hospital.available_beds }} available / {{ hospital.total_beds }} total</p>
+    <p><strong>Ambulances:</strong> {{ hospital.ambulances_busy }} busy / {{ hospital.ambulances_total }} total</p>
+  </div>
+</section>
+
+<h3>Pending Requests</h3>
+{% if pending %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Patient</th>
+      <th>Specialty</th>
+      <th>Ambulance</th>
+      <th>Symptoms</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in pending %}
+    <tr>
+      <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ r.patient.name }}</td>
+      <td>{{ r.specialty }}</td>
+      <td>{{ 'Yes' if r.needs_ambulance else 'No' }}</td>
+      <td>{{ r.symptoms }}</td>
+      <td>
+        <form method="post" action="{{ url_for('hospital_accept', req_id=r.id) }}" class="inline">
+          <button type="submit" class="btn">Accept</button>
+        </form>
+        <form method="post" action="{{ url_for('hospital_reject', req_id=r.id) }}" class="inline">
+          <button type="submit" class="btn outline">Reject</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No pending requests.</p>
+{% endif %}
+
+<h3>Recent Activity</h3>
+{% if recent %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Patient</th>
+      <th>Specialty</th>
+      <th>Ambulance</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in recent %}
+    <tr>
+      <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ r.patient.name }}</td>
+      <td>{{ r.specialty }}</td>
+      <td>{{ 'Yes' if r.needs_ambulance else 'No' }}</td>
+      <td><span class="badge {{ r.status }}">{{ r.status|capitalize }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No recent activity.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Multiple Disease Prediction</h2>
+<p>Select a disease, then choose your symptoms. We'll analyze them and provide a clear Yes/No result with severity.</p>
+
+<!-- Disease buttons -->
+<div class="btn-group" style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0">
+  {% for d in diseases %}
+  <form method="get" action="{{ url_for('patient_predict') }}">
+    <input type="hidden" name="disease" value="{{ d }}">
+    <button type="submit" class="btn {% if disease == d %}outline{% endif %}">{{ d }}</button>
+  </form>
+  {% endfor %}
+</div>
+
+{% if disease %}
+  <h3>{{ disease }}</h3>
+  <form method="post" class="form">
+    <input type="hidden" name="disease" value="{{ disease }}">
+    <label>Symptoms (hold Ctrl/Cmd to select multiple)
+      <select name="symptoms" multiple size="8" style="height:auto">
+        {% for s in options %}
+        <option value="{{ s }}" {% if s in selected %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn">Predict</button>
+  </form>
+
+  {% if outcome %}
+    <div class="prediction-result" style="margin-top:16px;border:1px solid #ddd;border-radius:8px;padding:12px;background:#f8f9fa">
+      <h3 style="margin-top:0">Prediction Result</h3>
+      
+      <!-- Yes/No Result -->
+      <div style="margin-bottom:12px">
+        <span style="font-size:1.1em">
+          <strong>Do I have {{ disease.split('(')[0].strip() }}?</strong>
+          <span style="font-size:1.3em; color: {% if outcome.yes_no == 'Yes' %}#d32f2f{% else %}#2e7d32{% endif %}">
+            {{ outcome.yes_no }}
+          </span>
+        </span>
+      </div>
+      
+      <!-- Severity -->
+      <div style="margin-bottom:12px">
+        <strong>Severity:</strong> 
+        <span style="color: {% if outcome.severity == 'High' %}#d32f2f{% elif outcome.severity == 'Medium' %}#ed6c02{% elif outcome.severity == 'Low' %}#0288d1{% else %}#757575{% endif %}; font-weight:bold">
+          {{ outcome.severity }}
+        </span>
+        (Score: {{ outcome.score }}/{{ outcome.total }}, {{ "%d%%"|format(outcome.ratio * 100) }})
+      </div>
+      
+      <!-- Matched Symptoms -->
+      {% if outcome.matched %}
+        <div style="margin-top:8px">
+          <strong>Matched Symptoms:</strong>
+          <ul style="margin:4px 0 0 0;padding-left:20px">
+            {% for symptom, weight in outcome.matched %}
+            <li>
+              {{ symptom }}
+              <span style="color:#666;font-size:0.9em">(weight: {{ weight }})</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% else %}
+        <p>No matching symptoms detected.</p>
+      {% endif %}
+      
+      <div style="margin-top:12px;font-size:0.9em;color:#666">
+        <p><em>Note: This is a prediction tool, not a diagnosis. Please consult a healthcare professional.</em></p>
+      </div>
+    </div>
+  {% endif %}
+{% else %}
+  <p>Select a disease above to start.</p>
+{% endif %}
+
+<p style="margin-top:16px"><a href="{{ url_for('patient_dashboard') }}">Back to Patient Dashboard</a></p>
+{% endblock %}
