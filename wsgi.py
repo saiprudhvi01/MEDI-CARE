@@ -1,12 +1,9 @@
 import os
-from app import app, db, create_app
-from flask_migrate import Migrate
+from app import create_app, db
+from config import config
 
-# Create app instance using the application factory
-app = create_app()
-
-# Initialize Flask-Migrate
-migrate = Migrate(app, db)
+# Create app instance using the application factory with production config
+app = create_app(config['production'])
 
 # Create tables if they don't exist
 with app.app_context():
