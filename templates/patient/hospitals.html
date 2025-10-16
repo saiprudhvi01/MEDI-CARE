@@ -2,51 +2,51 @@
 
 {% block extra_css %}
 <style>
-  .progress {
-    height: 20px;
-    background-color: #e9ecef;
-    border-radius: 0.25rem;
-    overflow: hidden;
-    margin-bottom: 0;
-  }
-  
-  .progress-bar-custom {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: white;
-    text-align: center;
-    white-space: nowrap;
-    transition: width 0.6s ease;
-  }
-  
-  .bed-utilization-high {
-    background-color: #dc3545; /* Red for high utilization */
-  }
-  
-  .bed-utilization-medium {
-    background-color: #ffc107; /* Yellow for medium utilization */
-  }
-  
-  .bed-utilization-low {
-    background-color: #198754; /* Green for low utilization */
-  }
-  
-  .hospital-name {
-    font-weight: 600;
-  }
-  
-  .hospital-code {
-    color: #6c757d;
-    font-size: 0.875rem;
-  }
-  
-  .specialty-badge {
-    margin-right: 0.25rem;
-    margin-bottom: 0.25rem;
-  }
+.progress {
+  height: 20px;
+  background-color: #e9ecef;
+  border-radius: 0.25rem;
+  overflow: hidden;
+  margin-bottom: 0;
+}
+
+.progress-bar-custom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: white;
+  text-align: center;
+  white-space: nowrap;
+  transition: width 0.6s ease;
+}
+
+.bed-utilization-high {
+  background-color: #dc3545;
+}
+
+.bed-utilization-medium {
+  background-color: #ffc107;
+}
+
+.bed-utilization-low {
+  background-color: #198754;
+}
+
+.hospital-name {
+  font-weight: 600;
+}
+
+.hospital-code {
+  color: #6c757d;
+  font-size: 0.875rem;
+}
+
+.specialty-badge {
+  margin-right: 0.25rem;
+  margin-bottom: 0.25rem;
+}
 </style>
 {% endblock %}
 
@@ -99,6 +99,7 @@
     <tr>
       <th>Hospital Name</th>
       <th>Location</th>
+      <th>Distance</th>
       <th>Beds</th>
       <th>Ambulances</th>
       <th>Doctors</th>
@@ -113,7 +114,19 @@
         <div class="hospital-name">{{ h.name }}</div>
         <div class="hospital-code">{{ h.hospital_code }}</div>
       </td>
-      <td>{{ h.state }}</td>
+      <td>
+        {{ h.state }}
+        <div class="small text-muted">{{ h.city or '' }}</div>
+      </td>
+      <td class="distance-cell">
+        <span class="distance-value">
+          {% if h.distance is not none %}
+            {{ "%.1f km"|format(h.distance) }}
+          {% else %}
+            N/A
+          {% endif %}
+        </span>
+      </td>
       <td>
         {% set bed_utilization = (h.booked_beds / h.total_beds * 100) if h.total_beds > 0 else 0 %}
         {% if bed_utilization > 80 %}
@@ -170,12 +183,9 @@
       </td>
       <td>
         <form method="post" action="{{ url_for('create_request', hospital_id=h.id) }}" class="d-grid gap-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="notes" value="{{ notes }}">
           <input type="hidden" name="predicted_disease" value="{{ predicted_disease or 'N/A' }}">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="needs_ambulance" id="ambulance-{{ h.id }}">
-            <label class="form-check-label" for="ambulance-{{ h.id }}">Need Ambulance</label>
-          </div>
           <button type="submit" class="btn btn-sm btn-primary">Send Request</button>
         </form>
       </td>
@@ -192,5 +202,23 @@
 </div>
 {% endif %}
 
-<p><a href="{{ url_for('patient_dashboard') }}">Back</a></p>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+// Simple form submission
+document.addEventListener('DOMContentLoaded', function() {
+    // Get all request forms
+    const requestForms = document.querySelectorAll('form[action*="create_request"]');
+    
+    // Add submit event listener to each form
+    requestForms.forEach(form => {
+        form.addEventListener('submit', function(e) {
+            // Form will submit normally
+            return true;
+        });
+    });
+});
+</script>
 {% endblock %}

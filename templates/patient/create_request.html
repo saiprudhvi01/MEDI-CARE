@@ -1,0 +1,535 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">New Hospital Request - {{ hospital.name }}</h4>
+                </div>
+                <div class="card-body">
+                    <form method="POST" id="requestForm">
+                        {{ form.hidden_tag() }}
+                        
+                        <div class="mb-3">
+                            <label for="symptoms" class="form-label">Symptoms</label>
+                            <textarea class="form-control" id="symptoms" name="symptoms" rows="3" required></textarea>
+                            <div class="form-text">Please describe your symptoms in detail.</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="specialty" class="form-label">Required Specialty</label>
+                            <select class="form-select" id="specialty" name="specialty" required>
+                                <option value="" selected disabled>Select a specialty</option>
+                                <option value="Cardiology">Cardiology</option>
+                                <option value="Neurology">Neurology</option>
+                                <option value="Orthopedics">Orthopedics</option>
+                                <option value="Pediatrics">Pediatrics</option>
+                                <option value="General Medicine">General Medicine</option>
+                                <option value="Emergency">Emergency</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="needs_ambulance" name="needs_ambulance">
+                            <label class="form-check-label" for="needs_ambulance">I need an ambulance</label>
+                        </div>
+                        
+                        <div id="locationSection" class="mb-3" style="display: none;">
+                            <h5>Pickup Location Details</h5>
+                            
+                            <div class="alert alert-info mb-3">
+                                <i class="fas fa-info-circle me-2"></i>
+                                Please provide your current location details for the ambulance pickup.
+                            </div>
+                            
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label for="state" class="form-label">State <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="state" name="state" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="city" class="form-label">City <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="city" name="city" required>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="address" class="form-label">Full Address <span class="text-danger">*</span></label>
+                                <textarea class="form-control" id="address" name="address" rows="2" required 
+                                    placeholder="House/Flat no, Building name, Street, Area, Landmark"></textarea>
+                                <div class="form-text">Please enter your complete pickup address</div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="pincode" class="form-label">Pincode</label>
+                                <input type="text" class="form-control" id="pincode" name="pincode" 
+                                    placeholder="Enter 6-digit pincode">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="landmark" class="form-label">Nearest Landmark</label>
+                                <input type="text" class="form-control" id="landmark" name="landmark" 
+                                    placeholder="e.g., Near Central Park, Opposite City Mall">
+                                <div class="form-text">
+                                    <i class="fas fa-info-circle"></i> 
+                                    Please provide a nearby landmark to help the driver locate you easily.
+                                </div>
+                            </div>
+                            
+                            <input type="hidden" id="patient_lat" name="patient_lat" value="">
+                            <input type="hidden" id="patient_lng" name="patient_lng" value="">
+                            
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle me-2"></i>
+                                Please verify that the address is correct. The ambulance will come to this location.
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary">Submit Request</button>
+                            <a href="{{ url_for('patient_dashboard') }}" class="btn btn-secondary">Cancel</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Google Maps API -->
+<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places&callback=initMap" async defer></script>
+
+<script>
+    let map;
+    let marker;
+    let geocoder;
+    let autocomplete;
+    
+    // Toggle location section when ambulance is needed
+    document.getElementById('needs_ambulance').addEventListener('change', function() {
+        const locationSection = document.getElementById('locationSection');
+        locationSection.style.display = this.checked ? 'block' : 'none';
+        
+        // Initialize map when first shown
+        if (this.checked && !window.google) {
+            loadGoogleMapsAPI();
+        } else if (this.checked && window.google && !map) {
+            initMap();
+        }
+    });
+    
+    // Load Google Maps API
+    function loadGoogleMapsAPI() {
+        const script = document.createElement('script');
+        script.src = `https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places&callback=initMap`;
+        script.async = true;
+        script.defer = true;
+        document.head.appendChild(script);
+    }
+    
+    function initMap() {
+        const mapElement = document.getElementById('map');
+        const mapPlaceholder = document.getElementById('map-placeholder');
+        
+        // Hide the placeholder and show the map
+        if (mapPlaceholder) {
+            mapPlaceholder.style.display = 'none';
+        }
+        mapElement.style.background = '#fff';
+        
+        // Initialize map centered on India
+        const india = { lat: 20.5937, lng: 78.9629 };
+        map = new google.maps.Map(mapElement, {
+            zoom: 5,
+            center: india,
+            mapTypeControl: true,
+            streetViewControl: false,
+            fullscreenControl: true,
+            zoomControl: true
+        });
+        
+        // Initialize geocoder and autocomplete
+        geocoder = new google.maps.Geocoder();
+        autocomplete = new google.maps.places.Autocomplete(
+            document.getElementById('address'),
+            { 
+                componentRestrictions: { country: 'in' },
+                fields: ['address_components', 'geometry', 'formatted_address'],
+                types: ['address']
+            }
+        );
+        
+        // When a place is selected from the dropdown, populate the address fields
+        autocomplete.addListener('place_changed', fillInAddress);
+        
+        // Add click listener to the map to update location
+        map.addListener('click', function(e) {
+            updateMapMarker(e.latLng);
+            codeLatLng(e.latLng.lat(), e.latLng.lng());
+        });
+        
+        // Initialize marker
+        marker = new google.maps.Marker({
+            map: map,
+            draggable: true,
+            animation: google.maps.Animation.DROP,
+            position: india
+        });
+        
+        // Update form fields when marker is dragged
+        marker.addListener('dragend', function() {
+            const pos = marker.getPosition();
+            codeLatLng(pos.lat(), pos.lng());
+        });
+        
+        // Set up locate me button
+        const locateMeBtn = document.getElementById('locate-me');
+        if (locateMeBtn) {
+            locateMeBtn.addEventListener('click', getCurrentLocation);
+        }
+        
+        // Try to get user's current location
+        if (navigator.geolocation) {
+            const locateMeBtn = document.getElementById('locate-me');
+            if (locateMeBtn) {
+                locateMeBtn.click();
+            }
+        }
+    }
+    
+    // Fill in address fields based on place selection
+    function fillInAddress() {
+        const place = autocomplete.getPlace();
+        if (!place.geometry) {
+            window.alert("No details available for input: '" + place.name + "'");
+            return;
+        }
+        
+        // Update map to show the selected location
+        updateMapMarker(place.geometry.location);
+        
+        // Get address components
+        const addressComponents = place.address_components || [];
+        
+        // Reset form fields
+        document.getElementById('state').value = '';
+        document.getElementById('city').value = '';
+        document.getElementById('pincode').value = '';
+        
+        // Parse address components
+        for (const component of addressComponents) {
+            const componentType = component.types[0];
+            
+            switch (componentType) {
+                case 'administrative_area_level_1':
+                    document.getElementById('state').value = component.long_name;
+                    break;
+                case 'locality':
+                case 'sublocality_level_1':
+                    document.getElementById('city').value = component.long_name;
+                    break;
+                case 'postal_code':
+                    document.getElementById('pincode').value = component.long_name;
+                    break;
+            }
+        }
+        
+        // Form submission handler
+    document.addEventListener('DOMContentLoaded', function() {
+        const needsAmbulance = document.getElementById('needs_ambulance');
+        const locationSection = document.getElementById('locationSection');
+        const requestForm = document.getElementById('requestForm');
+        
+        // Toggle location section when ambulance is needed
+        if (needsAmbulance) {
+            needsAmbulance.addEventListener('change', function() {
+                locationSection.style.display = this.checked ? 'block' : 'none';
+                if (this.checked) {
+                    // Set default coordinates to India if not set
+                    if (!document.getElementById('patient_lat').value) {
+                        document.getElementById('patient_lat').value = '20.5937';
+                        document.getElementById('patient_lng').value = '78.9629';
+                    }
+                }
+            });
+        }
+        
+        // Form submission
+        if (requestForm) {
+            requestForm.addEventListener('submit', function(e) {
+                if (needsAmbulance && needsAmbulance.checked) {
+                    // Get the address from the form
+                    const state = document.getElementById('state').value.trim();
+                    const city = document.getElementById('city').value.trim();
+                    const address = document.getElementById('address').value.trim();
+                    const landmark = document.getElementById('landmark').value.trim();
+                    const pincode = document.getElementById('pincode').value.trim();
+                    
+                    // Validate required fields
+                    if (!state || !city || !address) {
+                        e.preventDefault();
+                        alert('Please fill in all required location details for ambulance service.');
+                        return false;
+                    }
+                    
+                    // Combine all address parts
+                    const fullAddress = `${address}, ${landmark ? landmark + ', ' : ''}${city}, ${state} ${pincode}`.trim();
+                    
+                    // Set the full address in a hidden field
+                    let addressField = document.getElementById('full_address');
+                    if (!addressField) {
+                        addressField = document.createElement('input');
+                        addressField.type = 'hidden';
+                        addressField.id = 'full_address';
+                        addressField.name = 'full_address';
+                        requestForm.appendChild(addressField);
+                    }
+                    addressField.value = fullAddress;
+                    
+                    // Set default coordinates if not set
+                    if (!document.getElementById('patient_lat').value) {
+                        document.getElementById('patient_lat').value = '20.5937';
+                        document.getElementById('patient_lng').value = '78.9629';
+                    }
+                    
+                    // Show confirmation dialog
+                    if (!confirm(`Ambulance will be sent to:\n\n${fullAddress}\n\nIs this correct?`)) {
+                        e.preventDefault();
+                        return false;
+                    }
+                }
+                return true;
+            });
+        }
+        });
+        
+        // Handle get location button click
+    const getLocationBtn = document.getElementById('getLocationBtn');
+    if (getLocationBtn) {
+        getLocationBtn.addEventListener('click', getCurrentLocation);
+    }
+    
+    // Close the DOMContentLoaded event listener
+    });
+    
+    function setMarker(location) {
+        // Remove existing marker if any
+        if (marker) {
+            marker.setMap(null);
+        }
+        
+        // Add a marker at the specified location
+        marker = new google.maps.Marker({
+            position: location,
+            map: map,
+            draggable: true,
+            title: 'Your location'
+        });
+        
+        // Update form fields when marker is dragged
+        marker.addListener('dragend', () => {
+            const pos = marker.getPosition();
+            updateFormFields(pos.lat(), pos.lng());
+            codeLatLng(pos.lat(), pos.lng());
+        });
+        
+        // Update the map view
+        map.setCenter(location);
+        map.setZoom(16);
+    }
+    
+    function updateFormFields(lat, lng) {
+        document.getElementById('patient_lat').value = lat;
+        document.getElementById('patient_lng').value = lng;
+    }
+    
+    function geocodeAddress(geocoder, address) {
+        geocoder.geocode({ 'address': address }, (results, status) => {
+            if (status === 'OK') {
+                // Update map and marker
+                const location = results[0].geometry.location;
+                updateMapMarker(location);
+                
+                // Update form fields
+                updateFormFields(location.lat(), location.lng());
+                
+                // Get address components
+                const addressComponents = results[0].address_components || [];
+                
+                // Reset form fields
+                document.getElementById('state').value = '';
+                document.getElementById('city').value = '';
+                document.getElementById('pincode').value = '';
+                
+                // Parse address components
+                for (const component of addressComponents) {
+                    const componentType = component.types[0];
+                    
+                    if (componentType === 'administrative_area_level_1') {
+                        document.getElementById('state').value = component.long_name;
+                    } else if (componentType === 'locality' || componentType === 'sublocality_level_1') {
+                        document.getElementById('city').value = component.long_name;
+                    } else if (componentType === 'postal_code') {
+                        document.getElementById('pincode').value = component.long_name;
+                    }
+                }
+            } else {
+                alert('Could not find the address. Please try again or enter the address manually.');
+            }
+        });
+    }
+    
+    function codeLatLng(lat, lng) {
+        const latlng = { lat: parseFloat(lat), lng: parseFloat(lng) };
+        
+        geocoder.geocode({ 'location': latlng }, (results, status) => {
+            if (status === 'OK') {
+                if (results[0]) {
+                    // Update address field with formatted address
+                    document.getElementById('address').value = results[0].formatted_address;
+                    
+                    // Parse address components
+                    const addressComponents = results[0].address_components || [];
+                    
+                    // Reset form fields
+                    document.getElementById('state').value = '';
+                    document.getElementById('city').value = '';
+                    document.getElementById('pincode').value = '';
+                    
+                    // Parse address components
+                    for (const component of addressComponents) {
+                        const componentType = component.types[0];
+                        
+                        if (componentType === 'administrative_area_level_1') {
+                            document.getElementById('state').value = component.long_name;
+                        } else if (componentType === 'locality' || componentType === 'sublocality_level_1') {
+                            document.getElementById('city').value = component.long_name;
+                        } else if (componentType === 'postal_code') {
+                            document.getElementById('pincode').value = component.long_name;
+                        }
+                    }
+                }
+            } else {
+                console.log('Geocoder failed due to: ' + status);
+            }
+        });
+    }
+    
+    function handleLocationError(browserHasGeolocation, pos) {
+        // Set default marker at India
+        setMarker(pos);
+        updateFormFields(pos.lat, pos.lng);
+        
+        // Show error message
+        const infoWindow = new google.maps.InfoWindow();
+        infoWindow.setPosition(pos);
+        infoWindow.setContent(
+            browserHasGeolocation
+                ? "Error: The Geolocation service failed or your browser doesn't support geolocation."
+                : "Error: Your browser doesn't support geolocation."
+        );
+        infoWindow.open(map);
+    }
+    
+    // Get current location using browser's geolocation API
+    function getCurrentLocation() {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const pos = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+                    setMarker(pos);
+                    updateFormFields(pos.lat, pos.lng);
+                    
+                    // Center the map on the user's location
+                    if (map) {
+                        map.setCenter(pos);
+                    }
+                },
+                function(error) {
+                    // Handle errors
+                    let errorMessage = 'Error: ';
+                    switch(error.code) {
+                        case error.PERMISSION_DENIED:
+                            errorMessage += 'User denied the request for geolocation.';
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            errorMessage += 'Location information is unavailable.';
+                            break;
+                        case error.TIMEOUT:
+                            errorMessage += 'The request to get user location timed out.';
+                            break;
+                        case error.UNKNOWN_ERROR:
+                            errorMessage += 'An unknown error occurred.';
+                            break;
+                    }
+                    alert(errorMessage + '\n\nPlease enter your location manually or enable location services in your browser settings.');
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,  // 10 seconds
+                    maximumAge: 0  // Force fresh location
+                }
+            );
+        } else {
+            alert('Geolocation is not supported by your browser. Please enter your location manually.');
+        }
+    }
+    
+    // Handle click on 'Use My Current Location' button
+    document.getElementById('getLocationBtn').addEventListener('click', getCurrentLocation);
+    
+    // Form submission handler
+    document.getElementById('requestForm').addEventListener('submit', function(e) {
+        const needsAmbulance = document.getElementById('needs_ambulance').checked;
+        
+        if (needsAmbulance) {
+            const state = document.getElementById('state').value.trim();
+            const city = document.getElementById('city').value.trim();
+            const address = document.getElementById('address').value.trim();
+            
+            if (!state || !city || !address) {
+                e.preventDefault();
+                alert('Please fill in all location details for ambulance service.');
+                return false;
+            }
+            
+            // Update the hidden lat/lng fields with dummy values
+            // In a real app, you would geocode the address here
+            document.getElementById('patient_lat').value = (18.5204 + (Math.random() * 0.01)).toFixed(6);
+            document.getElementById('patient_lng').value = (73.8567 + (Math.random() * 0.01)).toFixed(6);
+        }
+        
+        return true;
+    });
+</script>
+
+<style>
+    #map {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-top: 10px;
+    }
+    
+    .pac-container {
+        z-index: 1051 !important;
+    }
+    
+    .form-text {
+        font-size: 0.875em;
+        color: #6c757d;
+    }
+    
+    .alert {
+        margin-top: 1rem;
+    }
+    
+    .btn {
+        margin-top: 0.5rem;
+    }
+</style>
+{% endblock %}

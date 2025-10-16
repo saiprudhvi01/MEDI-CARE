@@ -1,22 +1,202 @@
 {% extends 'base.html' %}
+
 {% block content %}
-<h2>Register as Patient</h2>
-<form method="post" class="form">
-  <label>Full Name
-    <input type="text" name="name" required>
-  </label>
-  <label>Phone
-    <input type="text" name="phone">
-  </label>
-  <label>Username
-    <input type="text" name="username" required>
-  </label>
-  <label>Email
-    <input type="email" name="email" required>
-  </label>
-  <label>Password
-    <input type="password" name="password" required>
-  </label>
-  <button type="submit" class="btn">Register</button>
-</form>
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">Patient Registration</h4>
+                </div>
+                <div class="card-body">
+                    <form method="post" id="patientForm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <input type="text" class="form-control" id="name" name="name" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="phone" class="form-label">Phone Number</label>
+                                    <input type="tel" class="form-control" id="phone" name="phone" 
+                                           pattern="[0-9]{10}" title="Please enter a valid 10-digit phone number" required>
+                                    <div class="form-text">10-digit number without any spaces or special characters</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="username" class="form-label">Username</label>
+                                    <input type="text" class="form-control" id="username" name="username" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="email" class="form-label">Email</label>
+                                    <input type="email" class="form-control" id="email" name="email" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="password" class="form-label">Password</label>
+                                    <input type="password" class="form-control" id="password" name="password" 
+                                           minlength="6" required>
+                                    <div class="form-text">At least 6 characters</div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6">
+                                <h5>Your Location</h5>
+                                <div class="mb-3">
+                                    <label for="address" class="form-label">Address</label>
+                                    <input type="text" class="form-control" id="address" name="address" required>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label for="city" class="form-label">City</label>
+                                            <input type="text" class="form-control" id="city" name="city" required>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label for="state" class="form-label">State</label>
+                                            <input type="text" class="form-control" id="state" name="state" required>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="pincode" class="form-label">Pincode</label>
+                                    <input type="text" class="form-control" id="pincode" name="pincode" 
+                                           pattern="[0-9]{6}" title="Please enter a valid 6-digit pincode" required>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary">Register</button>
+                            <a href="{{ url_for('login') }}" class="btn btn-link">Already have an account? Login</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // Form validation
+    function updateFormFields(lat, lng) {
+        document.getElementById('lat').value = lat;
+        document.getElementById('lng').value = lng;
+    }
+    
+    function updateAddressComponents(place) {
+        // Extract address components and fill the form
+        for (const component of place.address_components) {
+            const componentType = component.types[0];
+            
+            if (componentType === 'locality') {
+                document.getElementById('city').value = component.long_name;
+            }
+            
+            if (componentType === 'administrative_area_level_1') {
+                document.getElementById('state').value = component.long_name;
+            }
+            
+            if (componentType === 'postal_code') {
+                document.getElementById('pincode').value = component.long_name;
+            }
+        }
+    }
+    
+    function geocodeAddress(geocoder, address) {
+        geocoder.geocode({ 'address': address }, (results, status) => {
+            if (status === 'OK') {
+                // Update map and marker
+                map.setCenter(results[0].geometry.location);
+                map.setZoom(15);
+                setMarker(results[0].geometry.location);
+                
+                // Update form fields
+                updateFormFields(
+                    results[0].geometry.location.lat(),
+                    results[0].geometry.location.lng()
+                );
+                
+                // Update address components
+                updateAddressComponents(results[0]);
+                
+                // Update address field with formatted address
+                document.getElementById('address').value = results[0].formatted_address;
+            } else {
+                alert('Geocode was not successful for the following reason: ' + status);
+            }
+        });
+    }
+    
+    function codeLatLng(lat, lng) {
+        const latlng = { lat: lat, lng: lng };
+        
+        geocoder.geocode({ 'location': latlng }, (results, status) => {
+            if (status === 'OK') {
+                if (results[0]) {
+                    document.getElementById('address').value = results[0].formatted_address;
+                    updateAddressComponents(results[0]);
+                } else {
+                    console.log('No results found');
+                }
+            } else {
+                console.log('Geocoder failed due to: ' + status);
+            }
+        });
+    }
+    
+    function handleLocationError(browserHasGeolocation, pos) {
+        // Set default marker at India
+        setMarker(pos);
+        updateFormFields(pos.lat, pos.lng);
+        
+        // Show error message
+        const infoWindow = new google.maps.InfoWindow();
+        infoWindow.setPosition(pos);
+        infoWindow.setContent(
+            browserHasGeolocation
+                ? "Error: The Geolocation service failed or your browser doesn't support geolocation."
+                : "Error: Your browser doesn't support geolocation."
+        );
+        infoWindow.open(map);
+    }
+    
+    // Form submission handler
+    document.getElementById('patientForm').addEventListener('submit', function(e) {
+        const lat = document.getElementById('lat').value;
+        const lng = document.getElementById('lng').value;
+        
+        if (!lat || !lng) {
+            e.preventDefault();
+            alert('Please provide your location on the map.');
+            return false;
+        }
+        
+        return true;
+    });
+</script>
+
+<style>
+    #map {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-top: 10px;
+    }
+    
+    .pac-container {
+        z-index: 1051 !important;
+    }
+    
+    .form-label {
+        font-weight: 500;
+    }
+    
+    .btn {
+        margin-top: 0.5rem;
+    }
+    
+    .alert {
+        margin-top: 1rem;
+        margin-bottom: 1rem;
+    }
+</style>
 {% endblock %}

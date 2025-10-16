@@ -1,4 +1,89 @@
 {% extends 'base.html' %}
+
+{% block extra_css %}
+<style>
+  .route-tracker {
+    margin: 2rem 0;
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  }
+  .map-container {
+    margin-top: 1.5rem;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  #map {
+    width: 100%;
+    height: 300px;
+    border: none;
+  }
+  .directions {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+  }
+  .direction-step {
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    border-left: 3px solid #0d6efd;
+    padding-left: 1rem;
+  }
+  .btn-location {
+    margin-left: 1rem;
+  }
+  .hospital-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin: 1rem 0;
+    border: 1px solid #dee2e6;
+    border-radius: 0.25rem;
+  }
+  .hospital-item {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #eee;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+  .hospital-item:hover {
+    background-color: #f8f9fa;
+  }
+  .hospital-item.active {
+    background-color: #e7f1ff;
+    border-left: 3px solid #0d6efd;
+  }
+  .hospital-name {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+  .hospital-address {
+    font-size: 0.875rem;
+    color: #6c757d;
+  }
+  .hospital-distance {
+    font-size: 0.8rem;
+    color: #28a745;
+    font-weight: 500;
+  }
+  .route-line {
+    position: absolute;
+    background-color: #0d6efd;
+    height: 3px;
+    transform-origin: left center;
+    z-index: 10;
+    display: none;
+  }
+  .loading {
+    text-align: center;
+    padding: 1rem;
+    display: none;
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <section class="hero">
   <h1>Hospital Management & Ambulance Booking</h1>
@@ -7,6 +92,230 @@
     <a class="btn" href="{{ url_for('login') }}">Login</a>
     <a class="btn outline" href="{{ url_for('register_patient') }}">Register as Patient</a>
     <a class="btn outline" href="{{ url_for('register_hospital') }}">Register Hospital Admin</a>
+    <a class="btn outline" href="{{ url_for('register_driver') }}">Register as Driver</a>
   </div>
 </section>
+
+<section class="container route-tracker">
+  <h2 class="text-center mb-4">Find Your Way to the Hospital</h2>
+  
+  <div class="row">
+    <div class="col-md-8 mx-auto">
+      <form id="locationForm" class="mb-4">
+        <div class="input-group">
+          <input type="text" id="startLocation" class="form-control" placeholder="Enter your location (e.g., 123 Main St, City)" required>
+          <button class="btn btn-outline-primary" type="button" id="useCurrentLocation">
+            <i class="bi bi-geo-alt"></i> Use My Location
+          </button>
+        </div>
+        <div class="d-grid mt-3">
+          <button type="submit" class="btn btn-primary">Find Nearby Hospitals</button>
+        </div>
+      </form>
+      
+      <div id="loading" class="text-center my-4" style="display: none;">
+        <div class="spinner-border text-primary" role="status">
+          <span class="visually-hidden">Loading...</span>
+        </div>
+        <p class="mt-2">Finding nearby hospitals...</p>
+      </div>
+      
+      <div id="hospitalsContainer" style="display: none;">
+        <h5 class="mb-3">Nearby Hospitals:</h5>
+        <div id="hospitalsList" class="hospital-list">
+          <!-- Hospitals will be populated here -->
+        </div>
+      </div>
+      
+      <div id="mapContainer" style="display: none;">
+        <h5 class="mb-3">Route to Hospital</h5>
+        <div class="map-container position-relative">
+          <iframe id="map" frameborder="0"></iframe>
+          <div id="routeLine" class="route-line"></div>
+        </div>
+        <div id="directions" class="directions mt-3">
+          <h6>Directions:</h6>
+          <div id="directionsList"></div>
+        </div>
+      </div>
+      <div id="noHospitals" class="text-center py-4" style="display: none;">
+        <i class="bi bi-hospital fs-1 text-muted"></i>
+        <p class="mt-2">No hospitals found near your location. Try another address.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const locationForm = document.getElementById('locationForm');
+  const useCurrentLocationBtn = document.getElementById('useCurrentLocation');
+  const startLocationInput = document.getElementById('startLocation');
+  const hospitalsContainer = document.getElementById('hospitalsContainer');
+  const hospitalsList = document.getElementById('hospitalsList');
+  const mapContainer = document.getElementById('mapContainer');
+  const directionsList = document.getElementById('directionsList');
+  const loading = document.getElementById('loading');
+  const noHospitals = document.getElementById('noHospitals');
+  const mapFrame = document.getElementById('map');
+  const routeLine = document.getElementById('routeLine');
+  
+  // Sample hospital data (in a real app, this would come from your backend)
+  const hospitals = [
+    { id: 1, name: 'Apollo Hospital', address: '21 Greams Lane, Off Greams Road, Chennai', lat: 13.0597, lng: 80.2496, distance: '1.2 km' },
+    { id: 2, name: 'Fortis Malar Hospital', address: '52, 1st Main Road, Gandhi Nagar, Adyar, Chennai', lat: 13.0104, lng: 80.2521, distance: '3.5 km' },
+    { id: 3, name: 'MIOT International', address: '4/112, Mount Poonamallee Road, Manapakkam, Chennai', lat: 13.0149, lng: 80.1918, distance: '5.1 km' },
+    { id: 4, name: 'Billroth Hospitals', address: '43, Lakshmi Talkies Road, Shenoy Nagar, Chennai', lat: 13.0818, lng: 80.2286, distance: '2.7 km' },
+    { id: 5, name: 'SIMSR Hospital', address: '1, Jawaharlal Nehru Salai, 100 Feet Road, Vadapalani, Chennai', lat: 13.0507, lng: 80.2136, distance: '4.3 km' }
+  ];
+  
+  // Sample directions (in a real app, this would come from a routing service)
+  const sampleDirections = [
+    'Start from your current location',
+    'Head northeast on Main Road toward Hospital Road',
+    'Turn right onto Hospital Road',
+    'Continue straight for 2 km',
+    'Turn left at the signal',
+    'Your destination will be on the right'
+  ];
+  
+  // Use current location
+  useCurrentLocationBtn.addEventListener('click', function() {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        function(position) {
+          // In a real app, you would reverse geocode these coordinates to get an address
+          startLocationInput.value = 'Your Current Location';
+          startLocationInput.dataset.lat = position.coords.latitude;
+          startLocationInput.dataset.lng = position.coords.longitude;
+        },
+        function(error) {
+          alert('Unable to retrieve your location. Please enter it manually.');
+          console.error('Geolocation error:', error);
+        }
+      );
+    } else {
+      alert('Geolocation is not supported by your browser. Please enter your location manually.');
+    }
+  });
+  
+  // Handle location form submission
+  locationForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const location = startLocationInput.value.trim();
+    if (!location) {
+      alert('Please enter your location or use the "Use My Location" button.');
+      return;
+    }
+    
+    // Show loading state
+    loading.style.display = 'block';
+    hospitalsContainer.style.display = 'none';
+    mapContainer.style.display = 'none';
+    noHospitals.style.display = 'none';
+    
+    // Simulate API call to find nearby hospitals
+    setTimeout(() => {
+      displayNearbyHospitals();
+      loading.style.display = 'none';
+      
+      if (hospitals.length > 0) {
+        hospitalsContainer.style.display = 'block';
+        mapContainer.style.display = 'block';
+        noHospitals.style.display = 'none';
+        
+        // Show the first hospital by default
+        selectHospital(hospitals[0]);
+      } else {
+        hospitalsContainer.style.display = 'none';
+        mapContainer.style.display = 'none';
+        noHospitals.style.display = 'block';
+      }
+    }, 1000);
+  });
+  
+  // Display nearby hospitals in the list
+  function displayNearbyHospitals() {
+    hospitalsList.innerHTML = '';
+    
+    hospitals.forEach(hospital => {
+      const hospitalItem = document.createElement('div');
+      hospitalItem.className = 'hospital-item';
+      hospitalItem.dataset.id = hospital.id;
+      hospitalItem.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <div class="hospital-name">${hospital.name}</div>
+            <div class="hospital-address">${hospital.address}</div>
+          </div>
+          <div class="hospital-distance">${hospital.distance} away</div>
+        </div>
+      `;
+      
+      hospitalItem.addEventListener('click', () => selectHospital(hospital));
+      hospitalsList.appendChild(hospitalItem);
+    });
+  }
+  
+  // Select a hospital and show its route
+  function selectHospital(hospital) {
+    // Update active state in the list
+    document.querySelectorAll('.hospital-item').forEach(item => {
+      item.classList.toggle('active', parseInt(item.dataset.id) === hospital.id);
+    });
+    
+    // Update map with hospital location
+    const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${hospital.lng-0.05},${hospital.lat-0.05},${hospital.lng+0.05},${hospital.lat+0.05}&layer=mapnik&marker=${hospital.lat},${hospital.lng}`;
+    mapFrame.src = mapUrl;
+    
+    // Update directions
+    updateDirections(hospital);
+    
+    // Simulate drawing a route line (in a real app, this would be done with a proper mapping library)
+    drawRouteLine(hospital);
+  }
+  
+  // Update directions list
+  function updateDirections(hospital) {
+    directionsList.innerHTML = '';
+    
+    // Update the first direction to include the hospital name
+    const directions = [...sampleDirections];
+    directions[directions.length - 1] = `Your destination ${hospital.name} will be on the right`;
+    
+    directions.forEach((step, index) => {
+      const div = document.createElement('div');
+      div.className = 'direction-step';
+      div.innerHTML = `<span class="me-2">${index + 1}.</span>${step}`;
+      directionsList.appendChild(div);
+    });
+  }
+  
+  // Simulate drawing a route line (visual effect only)
+  function drawRouteLine(hospital) {
+    // In a real app, you would use a proper mapping library to draw the route
+    // This is just a visual effect to simulate a route line
+    routeLine.style.display = 'block';
+    routeLine.style.width = '100px';
+    routeLine.style.transform = 'rotate(30deg)';
+    
+    // Animate the line (just for visual effect)
+    let width = 100;
+    const animate = () => {
+      width += 5;
+      routeLine.style.width = `${width}px`;
+      if (width < 300) {
+        requestAnimationFrame(animate);
+      }
+    };
+    
+    // Reset and start animation
+    routeLine.style.width = '0';
+    setTimeout(() => {
+      animate();
+    }, 100);
+  }
+});
+</script>
 {% endblock %}

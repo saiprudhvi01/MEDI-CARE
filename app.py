@@ -1,26 +1,83 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SubmitField, BooleanField
+from wtforms.validators import DataRequired, Length, Email, EqualTo
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_sqlalchemy import SQLAlchemy
-from flask_login import (
-    LoginManager,
-    UserMixin,
-    login_user,
-    login_required,
-    logout_user,
-    current_user,
-)
+from sqlalchemy.orm import joinedload
+from flask_migrate import Migrate
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_session import Session
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 import os
 
+# Initialize Flask app
 app = Flask(__name__)
+
+# Basic configuration
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///hospital.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['WTF_CSRF_ENABLED'] = True
+app.config['WTF_CSRF_SECRET_KEY'] = os.environ.get('CSRF_SECRET_KEY', 'dev-csrf-secret-key')
 
-# DB and Login manager
-db = SQLAlchemy(app)
-login_manager = LoginManager(app)
+# Initialize extensions
+db = SQLAlchemy()
+csrf = CSRFProtect()
+login_manager = LoginManager()
+
+# Make CSRF token available in all templates
+@app.context_processor
+def inject_csrf_token():
+    return dict(csrf_token=generate_csrf)
+
+# Initialize CSRF protection after app is created
+csrf.init_app(app)
+
+# Disable CSRF for API routes
+@csrf.exempt
+def exempt_api_routes():
+    pass
+
+# Configure login manager
 login_manager.login_view = 'login'
+login_manager.login_message = 'Please log in to access this page.'
+login_manager.login_message_category = 'info'
+
+# Initialize extensions with app
+db.init_app(app)
+csrf.init_app(app)
+login_manager.init_app(app)
+
+# Configure session after db is initialized
+app.config['SESSION_TYPE'] = 'sqlalchemy'
+app.config['SESSION_SQLALCHEMY'] = db
+app.config['SESSION_PERMANENT'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
+app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_COOKIE_SECURE'] = True  # Set to True in production with HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_REFRESH_EACH_REQUEST'] = True
+
+# Initialize session
+try:
+    server_session = Session()
+    server_session.init_app(app)
+except Exception as e:
+    app.logger.error(f'Failed to initialize SQLAlchemy session: {str(e)}')
+    # Fallback to filesystem session
+    app.config['SESSION_TYPE'] = 'filesystem'
+    server_session = Session()
+    server_session.init_app(app)
+
+# Initialize Flask-Migrate after db is fully set up
+migrate = Migrate(app, db)
+
+# Google Maps API Key - replace with your own key
+GOOGLE_MAPS_API_KEY = 'YOUR_GOOGLE_MAPS_API_KEY'
 
 # ==================
 # Models
@@ -32,9 +89,11 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
     is_hospital = db.Column(db.Boolean, default=False)
+    is_ambulance_driver = db.Column(db.Boolean, default=False)
 
     patient = db.relationship('Patient', backref='user', uselist=False)
     hospital = db.relationship('Hospital', backref='user', uselist=False)
+    ambulance_driver = db.relationship('AmbulanceDriver', backref='user', uselist=False)
 
     def set_password(self, password: str):
         self.password_hash = generate_password_hash(password)
@@ -49,6 +108,12 @@ class Patient(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     phone = db.Column(db.String(20), nullable=True)
+    address = db.Column(db.String(300), nullable=True)
+    city = db.Column(db.String(100), nullable=True)
+    state = db.Column(db.String(50), nullable=True)
+    pincode = db.Column(db.String(10), nullable=True)
+    lat = db.Column(db.Float, nullable=True)  # Patient's home latitude
+    lng = db.Column(db.Float, nullable=True)  # Patient's home longitude
 
     requests = db.relationship('BookingRequest', backref='patient', lazy=True)
 
@@ -59,10 +124,17 @@ class Hospital(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     hospital_code = db.Column(db.String(10), nullable=False, unique=True)
     name = db.Column(db.String(150), nullable=False)
+    address = db.Column(db.String(300), nullable=True)
+    city = db.Column(db.String(100), nullable=True)
     state = db.Column(db.String(50), nullable=False)
+    pincode = db.Column(db.String(10), nullable=True)
+    lat = db.Column(db.Float, nullable=True)  # Hospital's latitude
+    lng = db.Column(db.Float, nullable=True)  # Hospital's longitude
+    
     total_beds = db.Column(db.Integer, nullable=False, default=0)
     booked_beds = db.Column(db.Integer, nullable=False, default=0)
     available_beds = db.Column(db.Integer, nullable=False, default=0)
+    
     ambulances_total = db.Column(db.Integer, nullable=False, default=0)
     ambulances_busy = db.Column(db.Integer, nullable=False, default=0)
     
@@ -71,19 +143,64 @@ class Hospital(db.Model):
     doctors_available = db.Column(db.Integer, nullable=False, default=0)
     specialists = db.Column(db.JSON, nullable=False, default=dict)  # e.g., {'Cardiologist': 3, 'Neurologist': 2}
 
-    requests = db.relationship('BookingRequest', backref='hospital', lazy=True)
+    requests = db.relationship('BookingRequest', backref='hospital_requests', lazy=True)
+    ambulance_drivers = db.relationship('AmbulanceDriver', backref='hospital', lazy=True)
 
 
+class AmbulanceDriver(db.Model):
+    __tablename__ = 'ambulance_drivers'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20), nullable=False)
+    license_number = db.Column(db.String(50), nullable=False, unique=True)
+    hospital_id = db.Column(db.Integer, db.ForeignKey('hospitals.id'), nullable=True)
+    is_available = db.Column(db.Boolean, default=True)
+    current_lat = db.Column(db.Float, nullable=True)
+    current_lng = db.Column(db.Float, nullable=True)
+    last_updated = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    assigned_requests = db.relationship('BookingRequest', backref='ambulance_driver', lazy=True)
 class BookingRequest(db.Model):
     __tablename__ = 'booking_requests'
     id = db.Column(db.Integer, primary_key=True)
     patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=False)
-    hospital_id = db.Column(db.Integer, db.ForeignKey('hospitals.id'), nullable=False)
-    symptoms = db.Column(db.String(300), nullable=False)
-    specialty = db.Column(db.String(100), nullable=False)
-    needs_ambulance = db.Column(db.Boolean, default=False)
-    status = db.Column(db.String(20), default='pending')  # pending, accepted, rejected
+    hospital_id = db.Column(db.Integer, db.ForeignKey('hospitals.id'), nullable=True)  # Made nullable for ambulance-only requests
+    driver_id = db.Column(db.Integer, db.ForeignKey('ambulance_drivers.id'))
+    status = db.Column(db.String(20), default='pending')  # pending, accepted, in_transit, completed, cancelled
+    symptoms = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    accepted_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    cancelled_at = db.Column(db.DateTime)
+    cancelled_reason = db.Column(db.Text)
+    distance_covered = db.Column(db.Float, default=0.0)  # in kilometers
+    estimated_time = db.Column(db.Integer)  # in minutes
+    notes = db.Column(db.Text)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Driver location and distance fields
+    driver_lat = db.Column(db.Float)
+    driver_lng = db.Column(db.Float)  # Added missing driver longitude
+    distance = db.Column(db.Float)  # Initial distance between driver and patient
+    
+    # Location fields
+    pickup_lat = db.Column(db.Float, nullable=True)
+    pickup_lng = db.Column(db.Float, nullable=True)
+    destination_lat = db.Column(db.Float, nullable=True)
+    destination_lng = db.Column(db.Float, nullable=True)
+    current_lat = db.Column(db.Float, nullable=True)
+    current_lng = db.Column(db.Float, nullable=True)
+    specialty = db.Column(db.String(100), nullable=True)
+    needs_ambulance = db.Column(db.Boolean, default=False)
+    
+    # New fields for ambulance requests
+    is_ambulance_only = db.Column(db.Boolean, default=False)  # True for ambulance-only requests
+    patient_location_text = db.Column(db.Text)  # Patient's location in text format
+    emergency_description = db.Column(db.Text)  # Description of the emergency
+    contact_phone = db.Column(db.String(20))  # Emergency contact phone
+    pickup_time = db.Column(db.DateTime)  # When driver started the trip
+    completion_time = db.Column(db.DateTime)  # When trip was completed
 
 
 @login_manager.user_loader
@@ -191,6 +308,16 @@ def predict_disease(disease_name: str, selected_symptoms: list[str]):
 
 
 # ==================
+# Forms
+# ==================
+
+class LoginForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    remember = BooleanField('Remember Me')
+    submit = SubmitField('Login')
+
+# ==================
 # Routes - Auth
 # ==================
 @app.route('/')
@@ -259,20 +386,99 @@ def register_hospital():
     return render_template('auth/register_hospital.html', hospitals=hospitals)
 
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
+@app.route('/register/driver', methods=['GET', 'POST'])
+def register_driver():
+    if current_user.is_authenticated:
+        return redirect(url_for('home'))
+        
     if request.method == 'POST':
         username = request.form.get('username').strip()
+        email = request.form.get('email').strip()
         password = request.form.get('password')
+        name = request.form.get('name').strip()
+        phone = request.form.get('phone').strip()
+        license_number = request.form.get('license_number').strip()
+        hospital_id = request.form.get('hospital_id')
+        
+        # Check if username or email already exists
+        if User.query.filter_by(username=username).first():
+            flash('Username already exists', 'danger')
+            return redirect(url_for('register_driver'))
+            
+        if User.query.filter_by(email=email).first():
+            flash('Email already registered', 'danger')
+            return redirect(url_for('register_driver'))
+            
+        # Check if license number is unique
+        if AmbulanceDriver.query.filter_by(license_number=license_number).first():
+            flash('This license number is already registered', 'danger')
+            return redirect(url_for('register_driver'))
+            
+        # Create new user
+        user = User(
+            username=username,
+            email=email,
+            is_ambulance_driver=True
+        )
+        user.set_password(password)
+        
+        # Create ambulance driver
+        driver = AmbulanceDriver(
+            user=user,
+            name=name,
+            phone=phone,
+            license_number=license_number,
+            hospital_id=hospital_id if hospital_id else None,
+            is_available=True
+        )
+        
+        db.session.add(user)
+        db.session.add(driver)
+        db.session.commit()
+        
+        flash('Driver registration successful! Please login.', 'success')
+        return redirect(url_for('login'))
+    
+    # Get all hospitals for the dropdown
+    hospitals = Hospital.query.order_by(Hospital.name).all()
+    return render_template('auth/register_driver.html', hospitals=hospitals)
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        if current_user.is_hospital:
+            return redirect(url_for('hospital_dashboard'))
+        elif current_user.is_ambulance_driver:
+            return redirect(url_for('driver_dashboard'))
+        return redirect(url_for('patient_dashboard'))
+    
+    form = LoginForm()
+    
+    if form.validate_on_submit():
+        username = form.username.data.strip()
+        password = form.password.data
+        remember = form.remember.data
+        
         user = User.query.filter_by(username=username).first()
+        
         if user and user.check_password(password):
-            login_user(user)
-            flash('Logged in successfully.', 'success')
+            login_user(user, remember=remember)
+            flash('Logged in successfully!', 'success')
+            
+            next_page = request.args.get('next')
+            if next_page:
+                return redirect(next_page)
+                
             if user.is_hospital:
                 return redirect(url_for('hospital_dashboard'))
+            elif user.is_ambulance_driver:
+                return redirect(url_for('driver_dashboard'))
             return redirect(url_for('patient_dashboard'))
-        flash('Invalid credentials', 'danger')
-    return render_template('auth/login.html')
+        else:
+            flash('Login Unsuccessful. Please check username and password', 'danger')
+    
+    return render_template('auth/login.html', title='Login', form=form)
 
 
 @app.route('/logout')
@@ -349,8 +555,24 @@ def patient_dashboard():
             # Filter hospitals that have the selected specialty
             query = query.filter(Hospital.specialists[selected_specialty].isnot(None))
         
-        # Order by available beds (descending)
+        # Get all matching hospitals
         hospitals = query.order_by(Hospital.available_beds.desc()).all()
+        
+        # Calculate distance for each hospital if patient has location
+        patient = current_user.patient
+        if patient and patient.lat and patient.lng:
+            for hospital in hospitals:
+                if hospital.lat and hospital.lng:
+                    # Simple distance calculation (Haversine formula would be better)
+                    # This is a simplified version for demonstration
+                    lat_diff = abs(patient.lat - (hospital.lat or 0))
+                    lng_diff = abs(patient.lng - (hospital.lng or 0))
+                    hospital.distance = round((lat_diff ** 2 + lng_diff ** 2) ** 0.5 * 111, 2)  # Rough km conversion
+                else:
+                    hospital.distance = None
+        else:
+            for hospital in hospitals:
+                hospital.distance = None
         
         # Get unique states for the filter dropdown
         states = db.session.query(Hospital.state).distinct().all()
@@ -366,7 +588,8 @@ def patient_dashboard():
             selected_specialty=selected_specialty,
             auto_specialty=auto_specialty,
             states=state_list,
-            selected_state=state
+            selected_state=state,
+            has_location=patient and patient.lat is not None and patient.lng is not None
         )
 
     # For GET requests, just show the dashboard with state filter
@@ -378,29 +601,47 @@ def patient_dashboard():
 @app.route('/patient/request/<int:hospital_id>', methods=['POST'])
 @login_required
 def create_request(hospital_id: int):
-    if current_user.is_hospital:
-        flash('Hospital users cannot create patient requests.', 'warning')
-        return redirect(url_for('hospital_dashboard'))
+    try:
+        # Check user type
+        if current_user.is_hospital:
+            flash('Hospital users cannot create patient requests.', 'warning')
+            return redirect(url_for('hospital_dashboard'))
 
-    patient = current_user.patient
-    hospital = Hospital.query.get_or_404(hospital_id)
-    # Store patient notes in 'symptoms' column; use provided disease if present, else 'N/A'
-    notes = request.form.get('notes', '')
-    predicted_disease = request.form.get('predicted_disease', 'N/A')
-    needs_ambulance = request.form.get('needs_ambulance') == 'on'
-
-    br = BookingRequest(
-        patient_id=patient.id,
-        hospital_id=hospital.id,
-        symptoms=notes,
-        specialty=predicted_disease,
-        needs_ambulance=needs_ambulance,
-        status='pending',
-    )
-    db.session.add(br)
-    db.session.commit()
-    flash('Request sent to hospital.', 'success')
-    return redirect(url_for('patient_requests'))
+        # Get patient and hospital
+        patient = current_user.patient
+        if not patient:
+            flash('Patient profile not found. Please complete your profile.', 'danger')
+            return redirect(url_for('patient_dashboard'))
+            
+        hospital = Hospital.query.get_or_404(hospital_id)
+        
+        # Validate form data
+        notes = request.form.get('notes', '').strip()
+        predicted_disease = request.form.get('predicted_disease', 'N/A').strip()
+        
+        # Create booking request
+        br = BookingRequest(
+            patient_id=patient.id,
+            hospital_id=hospital.id,
+            symptoms=notes,
+            specialty=predicted_disease,
+            needs_ambulance=False,  # Ambulance feature removed
+            status='pending',
+            created_at=datetime.utcnow()
+        )
+        
+        # Save to database
+        db.session.add(br)
+        db.session.commit()
+        
+        flash('Request sent to hospital successfully!', 'success')
+        return redirect(url_for('patient_requests'))
+        
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Error creating request: {str(e)}', exc_info=True)
+        flash('An error occurred while processing your request. Please try again.', 'danger')
+        return redirect(url_for('patient_dashboard'))
 
 
 # ==================
@@ -437,12 +678,75 @@ def patient_predict():
 def patient_requests():
     if current_user.is_hospital:
         return redirect(url_for('hospital_dashboard'))
+    
+    # Check if patient record exists
+    if not current_user.patient:
+        flash('Patient profile not found. Please complete your profile.', 'danger')
+        return redirect(url_for('patient_dashboard'))
+        
+    # Query with all required relationships
     reqs = (
-        BookingRequest.query.filter_by(patient_id=current_user.patient.id)
+        BookingRequest.query
+        .filter_by(patient_id=current_user.patient.id)
+        .options(
+            db.joinedload(BookingRequest.hospital_requests),
+            db.joinedload(BookingRequest.ambulance_driver)
+        )
         .order_by(BookingRequest.created_at.desc())
         .all()
     )
     return render_template('patient/requests.html', requests=reqs)
+
+
+@app.route('/request_ambulance', methods=['POST'])
+@login_required
+def request_ambulance():
+    if current_user.is_hospital or current_user.is_ambulance_driver:
+        flash('Only patients can request ambulances.', 'danger')
+        return redirect(url_for('home'))
+    
+    # Get patient
+    patient = current_user.patient
+    if not patient:
+        flash('Patient profile not found. Please complete your profile.', 'danger')
+        return redirect(url_for('patient_dashboard'))
+    
+    try:
+        # Get form data
+        patient_location = request.form.get('patient_location', '').strip()
+        emergency_description = request.form.get('emergency_description', '').strip()
+        contact_phone = request.form.get('contact_phone', '').strip()
+        
+        # Validate required fields
+        if not all([patient_location, emergency_description, contact_phone]):
+            flash('All fields are required for ambulance request.', 'danger')
+            return redirect(url_for('patient_dashboard'))
+        
+        # Create ambulance request
+        ambulance_request = BookingRequest(
+            patient_id=patient.id,
+            hospital_id=None,  # No specific hospital for ambulance-only requests
+            status='pending',
+            symptoms=emergency_description,
+            emergency_description=emergency_description,
+            patient_location_text=patient_location,
+            contact_phone=contact_phone,
+            is_ambulance_only=True,
+            needs_ambulance=True,
+            created_at=datetime.utcnow()
+        )
+        
+        db.session.add(ambulance_request)
+        db.session.commit()
+        
+        flash('Ambulance request sent successfully! Drivers will be notified.', 'success')
+        return redirect(url_for('patient_requests'))
+        
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Error creating ambulance request: {str(e)}', exc_info=True)
+        flash('An error occurred while processing your ambulance request. Please try again.', 'danger')
+        return redirect(url_for('patient_dashboard'))
 
 
 # ==================
@@ -1156,9 +1460,510 @@ def seed_hospitals():
 # App factory-like init
 # ==================
 with app.app_context():
+    # Drop all tables to ensure clean state
+    db.drop_all()
+    # Create all tables with the latest schema
     db.create_all()
+    # Seed the database with initial data
     seed_hospitals()
 
+
+# ==================
+# Routes - Ambulance Driver
+# ==================
+
+@app.route('/driver/dashboard')
+@login_required
+def driver_dashboard():
+    if not current_user.is_authenticated or not current_user.is_ambulance_driver:
+        flash('Access denied. Ambulance drivers only.', 'danger')
+        return redirect(url_for('home'))
+    
+    # Get the driver's hospital ID
+    driver = current_user.ambulance_driver
+    hospital_id = driver.hospital_id if driver else None
+    
+    # Get requests for the driver's hospital that need an ambulance and not assigned to any driver
+    hospital_requests = db.session.query(BookingRequest).options(
+        db.joinedload(BookingRequest.patient)
+    ).filter(
+        BookingRequest.hospital_id == hospital_id,
+        BookingRequest.needs_ambulance == True,
+        BookingRequest.driver_id.is_(None),
+        BookingRequest.status == 'pending'
+    ).all()
+    
+    # Get ambulance-only requests (emergency ambulance requests from patients)
+    ambulance_requests = db.session.query(BookingRequest).options(
+        db.joinedload(BookingRequest.patient)
+    ).filter(
+        BookingRequest.is_ambulance_only == True,
+        BookingRequest.driver_id.is_(None),
+        BookingRequest.status == 'pending'
+    ).order_by(BookingRequest.created_at.asc()).all()
+    
+    # Get requests assigned to this driver
+    assigned_requests = db.session.query(BookingRequest).options(
+        db.joinedload(BookingRequest.patient),
+        db.joinedload(BookingRequest.hospital_requests)
+    ).filter(
+        BookingRequest.driver_id == driver.id,
+        BookingRequest.status.in_(['accepted', 'in_transit'])
+    ).order_by(BookingRequest.created_at.desc()).all()
+    
+    # Get completed requests (for history)
+    completed_requests = db.session.query(BookingRequest).options(
+        db.joinedload(BookingRequest.patient),
+        db.joinedload(BookingRequest.hospital_requests)
+    ).filter(
+        BookingRequest.driver_id == driver.id,
+        BookingRequest.status.in_(['completed', 'cancelled'])
+    ).order_by(BookingRequest.created_at.desc()).limit(10).all()
+    
+    return render_template(
+        'driver/dashboard.html',
+        title='Driver Dashboard',
+        hospital_requests=hospital_requests,
+        ambulance_requests=ambulance_requests,
+        assigned_requests=assigned_requests,
+        completed_requests=completed_requests,
+        GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY
+    )
+
+
+@app.route('/api/driver/location', methods=['POST'])
+@login_required
+@csrf.exempt
+def update_driver_location():
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    data = request.get_json()
+    if not data or 'latitude' not in data or 'longitude' not in data:
+        return jsonify({'success': False, 'message': 'Missing latitude or longitude'}), 400
+    
+    driver = current_user.ambulance_driver
+    
+    try:
+        driver.current_lat = data.get('latitude')
+        driver.current_lng = data.get('longitude')
+        
+        # Update the current request's location if driver is on a trip
+        current_request = BookingRequest.query.filter(
+            BookingRequest.driver_id == driver.id,
+            BookingRequest.status.in_(['accepted', 'in_transit'])
+        ).first()
+        
+        if current_request:
+            current_request.current_lat = driver.current_lat
+            current_request.current_lng = driver.current_lng
+        
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Location updated'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/requests/<int:request_id>/status', methods=['POST'])
+@login_required
+@csrf.exempt
+def update_request_status(request_id):
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    data = request.get_json()
+    status = data.get('status')
+    
+    if not status:
+        return jsonify({'success': False, 'message': 'Status is required'}), 400
+    
+    try:
+        booking = BookingRequest.query.get_or_404(request_id)
+        driver = current_user.ambulance_driver
+        
+        # Verify the driver is assigned to this request
+        if booking.driver_id != driver.id:
+            return jsonify({'success': False, 'message': 'Not authorized'}), 403
+        
+        # Validate status transition
+        valid_transitions = {
+            'accepted': ['in_transit'],
+            'in_transit': ['completed', 'cancelled'],
+            'pending': ['accepted', 'rejected']
+        }
+        
+        if booking.status not in valid_transitions or status not in valid_transitions[booking.status]:
+            return jsonify({
+                'success': False, 
+                'message': f'Invalid status transition from {booking.status} to {status}'
+            }), 400
+        
+        # Update status
+        booking.status = status
+        
+        # Handle status-specific logic
+        if status == 'in_transit':
+            driver.is_available = False
+            booking.pickup_time = datetime.utcnow()
+        elif status in ['completed', 'cancelled', 'rejected']:
+            driver.is_available = True
+            if status == 'completed':
+                booking.completion_time = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Request {status} successfully',
+            'request': {
+                'id': booking.id,
+                'status': booking.status,
+                'patient_name': booking.patient.name,
+                'patient_phone': booking.patient.phone,
+                'pickup_address': booking.patient.address,
+                'destination': booking.hospital_requests.name,
+                'distance_covered': booking.distance_covered
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/requests/<int:request_id>/distance', methods=['POST'])
+@login_required
+@csrf.exempt
+def update_distance(request_id):
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    data = request.get_json()
+    distance = data.get('distance')
+    
+    if distance is None:
+        return jsonify({'success': False, 'message': 'Distance is required'}), 400
+    
+    try:
+        distance = float(distance)
+        if distance < 0:
+            return jsonify({'success': False, 'message': 'Distance must be a positive number'}), 400
+            
+        booking = BookingRequest.query.get_or_404(request_id)
+        
+        # Verify the driver is assigned to this request
+        if booking.driver_id != current_user.ambulance_driver.id:
+            return jsonify({'success': False, 'message': 'Not authorized'}), 403
+        
+        # Update distance
+        booking.distance_covered = distance
+        db.session.commit()
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Distance updated',
+            'distance': distance
+        })
+    except ValueError:
+        return jsonify({'success': False, 'message': 'Invalid distance value'}), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ==================
+# API Endpoints - Driver
+# ==================
+
+@app.route('/api/requests/<int:request_id>/accept', methods=['POST'])
+@login_required
+def accept_request(request_id):
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    try:
+        # Get request data
+        data = request.get_json()
+        driver_lat = data.get('driver_lat')
+        driver_lng = data.get('driver_lng')
+        distance = data.get('distance', 0)
+        
+        if not all([driver_lat, driver_lng]):
+            return jsonify({
+                'success': False, 
+                'message': 'Driver location is required'
+            }), 400
+        
+        booking = BookingRequest.query.get_or_404(request_id)
+        driver = current_user.ambulance_driver
+        
+        # Check if request is already assigned
+        if booking.driver_id and booking.driver_id != driver.id:
+            return jsonify({
+                'success': False, 
+                'message': 'This request has already been assigned to another driver'
+            }), 400
+        
+        # Check if driver is available
+        if not driver.is_available:
+            return jsonify({
+                'success': False, 
+                'message': 'You already have an active request. Please complete it first.'
+            }), 400
+        
+        # Update booking with driver's location and distance
+        booking.driver_id = driver.id
+        booking.status = 'accepted'
+        booking.accepted_at = datetime.utcnow()
+        booking.driver_lat = driver_lat
+        booking.driver_lng = driver_lng
+        booking.distance = distance
+        
+        # Update driver status and location
+        driver.is_available = False
+        driver.current_lat = driver_lat
+        driver.current_lng = driver_lng
+        
+        db.session.commit()
+        
+        # Get patient info for response
+        patient = booking.patient
+        hospital = booking.hospital_requests
+        
+        return jsonify({
+            'success': True,
+            'message': 'Request accepted successfully',
+            'request': {
+                'id': booking.id,
+                'status': booking.status,
+                'patient_name': patient.name if patient else 'Unknown',
+                'patient_phone': patient.phone if patient else '',
+                'pickup_address': patient.address if patient else '',
+                'pickup_lat': patient.lat if patient else None,
+                'pickup_lng': patient.lng if patient else None,
+                'destination': hospital.name if hospital else '',
+                'destination_address': hospital.address if hospital else '',
+                'destination_lat': hospital.lat if hospital else None,
+                'destination_lng': hospital.lng if hospital else None,
+                'symptoms': booking.symptoms,
+                'distance': distance,
+                'created_at': booking.created_at.isoformat(),
+                'accepted_at': booking.accepted_at.isoformat() if booking.accepted_at else None
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/requests/<int:request_id>/complete', methods=['POST'])
+@login_required
+def complete_request(request_id):
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    data = request.get_json()
+    distance = data.get('distance', 0)
+    time_taken = data.get('time_taken', 0)  # in minutes
+    notes = data.get('notes', '')
+    
+    try:
+        booking = BookingRequest.query.get_or_404(request_id)
+        driver = current_user.ambulance_driver
+        
+        # Verify the driver is assigned to this request
+        if booking.driver_id != driver.id:
+            return jsonify({'success': False, 'message': 'Not authorized to complete this request'}), 403
+            
+        # Verify the request is in a completable state
+        if booking.status not in ['accepted', 'in_transit']:
+            return jsonify({
+                'success': False, 
+                'message': f'Cannot complete a request with status: {booking.status}'
+            }), 400
+        
+        # Calculate total time taken if not provided
+        if not time_taken and booking.accepted_at:
+            time_taken = (datetime.utcnow() - booking.accepted_at).total_seconds() / 60  # in minutes
+        
+        # Update booking
+        booking.status = 'completed'
+        booking.completion_time = datetime.utcnow()
+        booking.distance_covered = float(distance) if distance else 0
+        booking.time_taken_minutes = int(time_taken) if time_taken else 0
+        booking.notes = notes[:500]  # Limit notes length
+        booking.updated_at = datetime.utcnow()
+        
+        # Update driver status
+        driver.is_available = True
+        driver.last_updated = datetime.utcnow()
+        
+        # Update driver statistics
+        driver.total_trips_completed = (driver.total_trips_completed or 0) + 1
+        driver.total_distance_covered = (driver.total_distance_covered or 0) + (float(distance) if distance else 0)
+        
+        # Update hospital available beds if this was a hospital transfer
+        if booking.hospital_id and booking.hospital_requests:
+            hospital = booking.hospital_requests
+            if booking.status == 'completed' and hospital.available_beds > 0:
+                hospital.available_beds = max(0, hospital.available_beds - 1)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Trip completed successfully',
+            'request_id': booking.id,
+            'status': booking.status,
+            'distance_covered': booking.distance_covered,
+            'time_taken': booking.time_taken_minutes,
+            'completion_time': booking.completion_time.isoformat(),
+            'notes': booking.notes
+        })
+    except ValueError as ve:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Invalid input value: {str(ve)}'}), 400
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Error completing request {request_id}: {str(e)}', exc_info=True)
+        return jsonify({'success': False, 'message': 'An error occurred while completing the request'}), 500
+
+@app.route('/api/driver/active-request', methods=['GET'])
+@login_required
+def get_active_request():
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    try:
+        driver = current_user.ambulance_driver
+        
+        # Get active request (accepted or in_transit)
+        active_request = BookingRequest.query.filter(
+            BookingRequest.driver_id == driver.id,
+            BookingRequest.status.in_(['accepted', 'in_transit'])
+        ).first()
+        
+        if not active_request:
+            return jsonify({'success': True, 'has_active_request': False})
+        
+        return jsonify({
+            'success': True,
+            'has_active_request': True,
+            'request': {
+                'id': active_request.id,
+                'status': active_request.status,
+                'patient_name': active_request.patient.name,
+                'patient_phone': active_request.patient.phone,
+                'pickup_address': active_request.patient.address,
+                'pickup_lat': active_request.patient.lat,
+                'pickup_lng': active_request.patient.lng,
+                'destination': active_request.hospital_requests.name if active_request.hospital_requests else 'Emergency Location',
+                'destination_address': active_request.hospital_requests.address if active_request.hospital_requests else active_request.patient_location_text,
+                'destination_lat': active_request.hospital_requests.lat if active_request.hospital_requests else None,
+                'destination_lng': active_request.hospital_requests.lng if active_request.hospital_requests else None,
+                'current_lat': active_request.current_lat,
+                'current_lng': active_request.current_lng,
+                'distance_covered': active_request.distance_covered,
+                'symptoms': active_request.symptoms,
+                'created_at': active_request.created_at.isoformat(),
+                'accepted_at': active_request.accepted_at.isoformat() if active_request.accepted_at else None,
+                'started_at': active_request.pickup_time.isoformat() if active_request.pickup_time else None
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/ambulance-request/<int:request_id>/accept', methods=['POST'])
+@login_required
+@csrf.exempt
+def accept_ambulance_request(request_id):
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    try:
+        data = request.get_json()
+        driver_location = data.get('driver_location', '').strip()
+        distance = data.get('distance')
+        estimated_time = data.get('estimated_time')
+        
+        if not all([driver_location, distance, estimated_time]):
+            return jsonify({
+                'success': False, 
+                'message': 'Driver location, distance, and estimated time are required'
+            }), 400
+        
+        booking = BookingRequest.query.get_or_404(request_id)
+        driver = current_user.ambulance_driver
+        
+        # Check if request is already assigned
+        if booking.driver_id and booking.driver_id != driver.id:
+            return jsonify({
+                'success': False, 
+                'message': 'This request has already been assigned to another driver'
+            }), 400
+        
+        # Check if driver is available
+        if not driver.is_available:
+            return jsonify({
+                'success': False, 
+                'message': 'You already have an active request. Please complete it first.'
+            }), 400
+        
+        # Update booking
+        booking.driver_id = driver.id
+        booking.status = 'accepted'
+        booking.accepted_at = datetime.utcnow()
+        booking.distance = float(distance)
+        booking.estimated_time = int(estimated_time)
+        booking.notes = f"Driver location: {driver_location}"
+        
+        # Update driver status
+        driver.is_available = False
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Ambulance request accepted successfully',
+            'request_id': booking.id
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/ambulance-request/<int:request_id>/reject', methods=['POST'])
+@login_required
+@csrf.exempt
+def reject_ambulance_request(request_id):
+    if not current_user.is_ambulance_driver:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    try:
+        booking = BookingRequest.query.get_or_404(request_id)
+        
+        # Check if request is already assigned to someone else
+        if booking.driver_id and booking.driver_id != current_user.ambulance_driver.id:
+            return jsonify({
+                'success': False, 
+                'message': 'This request has already been assigned to another driver'
+            }), 400
+        
+        # Update booking status
+        booking.status = 'rejected'
+        booking.cancelled_at = datetime.utcnow()
+        booking.cancelled_reason = f"Rejected by driver {current_user.ambulance_driver.name}"
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Request rejected',
+            'request_id': booking.id
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================
 # Pages
