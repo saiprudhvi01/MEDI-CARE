@@ -13,4 +13,4 @@ requests==2.31.0
 SQLAlchemy==2.0.27
 alembic==1.13.1
 psycopg2-binary==2.9.9
-greenlet==3.0.3
+greenlet>=3.0.0
